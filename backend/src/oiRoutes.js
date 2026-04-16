@@ -49,13 +49,13 @@ async function fetchAndCache() {
       'https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json',
       { timeout: 120_000 }
     );
-    const nfo = data.filter((i) => i.exch_seg === 'NFO');
+    const nfo = data.filter((i) => i.exch_seg === 'NFO' || i.exch_seg === 'BFO');
     const now  = Date.now();
     nfoCache     = nfo;
     nfoCacheTime = now;
     // Persist to disk so next startup is instant
     fs.writeFileSync(CACHE_FILE, JSON.stringify({ savedAt: now, data: nfo }));
-    console.log(`[OI] Cached ${nfo.length} NFO instruments to disk`);
+    console.log(`[OI] Cached ${nfo.length} NFO+BFO instruments to disk`);
   } catch (e) {
     console.error('[OI] Download failed:', e.message);
     // Don't wipe existing cache on failure
