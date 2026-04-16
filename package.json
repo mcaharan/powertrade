@@ -6,6 +6,9 @@
     "start:backend": "cd backend && npm start",
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm run dev",
-    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "start": "bash ./scripts/start_all.sh",
+    "start:expose": "EXPOSE_FRONTEND=1 bash ./scripts/start_all.sh",
+    "stop": "docker-compose down"
   }
 }

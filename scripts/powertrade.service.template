@@ -1,0 +1,18 @@
+[Unit]
+Description=PowerTrade app (Docker + Node)
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/powertrade
+# User and Group to run the service as. Change as appropriate.
+User=ubuntu
+Group=ubuntu
+Environment=EXPOSE_FRONTEND=0
+ExecStart=/bin/bash /path/to/powertrade/scripts/start_all.sh
+ExecStop=/usr/bin/docker-compose -f /path/to/powertrade/docker-compose.yml down
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
