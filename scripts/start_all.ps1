@@ -1,7 +1,7 @@
 param(
     [int[]]$PortsToKill = @(5000,5173)
 )
-Set-StrictMode -Version Latest
+Set-StrictMode -Version Latest 
 $ErrorActionPreference = 'Stop'
 $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
