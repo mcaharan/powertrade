@@ -13,8 +13,8 @@ const TRADELOG_KEY    = 'pt_tradelog'
 const MAX_LOG         = 8
 
 const INDEX_CONFIG = {
-  NIFTY:  { spotToken: '26000', spotExchangeType: 1, optionExchangeType: 2 },
-  SENSEX: { spotToken: '1',     spotExchangeType: 3, optionExchangeType: 7 },
+  NIFTY:  { spotToken: '26000', spotExchangeType: 1, optionExchangeType: 2, exchange: 'NFO' },
+  SENSEX: { spotToken: '1',     spotExchangeType: 3, optionExchangeType: 7, exchange: 'BFO' },
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -109,7 +109,9 @@ export default function AutoTrade() {
   const [accountId, setAccountId]       = useState(null)
   const [executionSegment, setExecutionSegment] = useState('NIFTY')
   const [expiry, setExpiry]             = useState('')
-  const [chain, setChain]               = useState([])
+  const [chain, setChain]               = useState([])   // always NIFTY — for OI signals
+  const [execChain, setExecChain]       = useState([])   // exec index chain (NIFTY or SENSEX)
+  const [execExpiry, setExecExpiry]     = useState('')
   const [futToken, setFutToken]         = useState(null)
   const [status, setStatus]             = useState('idle')
   const [streaming, setStreaming]       = useState(false)
@@ -117,8 +119,11 @@ export default function AutoTrade() {
   const [tradeSetup, setTradeSetup]     = useState(null)
   const [, forceRender]                 = useState(0)
 
-  const underlying = executionSegment
-  const { spotToken, spotExchangeType, optionExchangeType } = INDEX_CONFIG[underlying] ?? INDEX_CONFIG['NIFTY']
+  // Signal index is always NIFTY; execution index follows user selection
+  const underlying = 'NIFTY'
+  const execIdx    = executionSegment
+  const execCfg    = INDEX_CONFIG[execIdx] ?? INDEX_CONFIG['NIFTY']
+  const { spotToken, spotExchangeType, optionExchangeType } = INDEX_CONFIG[underlying]
 
   // Paper trade state
   const [tradeLots, setTradeLots]             = useState(1)
@@ -292,6 +297,34 @@ export default function AutoTrade() {
       .finally(() => setLoadingChain(false))
   }, [expiry, underlying])
 
+  // ── Exec chain (SENSEX) expiry + strikes ─────────────────────────────────
+  useEffect(() => {
+    if (execIdx === underlying) { setExecExpiry(''); setExecChain([]); return }
+    axios.get(`/api/oi/expiries?name=${execIdx}`)
+      .then(({ data }) => setExecExpiry(data?.[0] || ''))
+      .catch(() => {})
+  }, [execIdx, underlying])
+
+  useEffect(() => {
+    if (execIdx === underlying) return
+    if (!execExpiry) return
+    axios.get(`/api/oi/option-chain?name=${execIdx}&expiry=${execExpiry}`)
+      .then(({ data }) => setExecChain(data.strikes || []))
+      .catch(() => {})
+  }, [execExpiry, execIdx, underlying])
+
+  // ── Subscribe exec tokens to live stream when exec chain loads ────────────
+  useEffect(() => {
+    if (execIdx === underlying || !execChain.length || !streaming || !accountId) return
+    const execTokens = []
+    execChain.forEach(s => {
+      if (s.CE) execTokens.push(s.CE.token)
+      if (s.PE) execTokens.push(s.PE.token)
+    })
+    axios.post('/api/oi/subscribe', { accountId, tokens: [execCfg.spotToken], exchangeType: execCfg.spotExchangeType }).catch(() => {})
+    axios.post('/api/oi/subscribe', { accountId, tokens: execTokens, exchangeType: execCfg.optionExchangeType }).catch(() => {})
+  }, [execChain, streaming, accountId, execIdx, underlying, execCfg])
+
   // ── Reset on account change ─────────────────────────────────────────────
   useEffect(() => {
     autoStarted.current  = false
@@ -393,7 +426,7 @@ export default function AutoTrade() {
         signal:      sig,
         symbol:      option.symbol,
         token:       option.token,
-        exchange:    'NFO',
+        exchange:    execCfg.exchange,
         side:        'BUY',
         lots:        tradeLots,
         productType: 'INTRADAY',
@@ -515,18 +548,32 @@ export default function AutoTrade() {
   const signal     = ceBuyReady ? 'CE BUY' : peBuyReady ? 'PE BUY' : 'NO TRADE'
 
   const itmDepth      = cfg.strikeType === 'ATM' ? 0 : parseInt(cfg.strikeType.replace('ITM', '')) || 1
+  // Signal strikes — from NIFTY chain (for condition display only)
   const ceTradeStrike = itmDepth === 0 ? atmStrike : (calcITMStrike(chain, priceNow, 'CE', itmDepth) ?? atmStrike)
   const peTradeStrike = itmDepth === 0 ? atmStrike : (calcITMStrike(chain, priceNow, 'PE', itmDepth) ?? atmStrike)
 
-  const tradeStrike = signal === 'CE BUY' ? ceTradeStrike : signal === 'PE BUY' ? peTradeStrike : null
-  const tradeOption = tradeStrike != null
-    ? chain.find(s => s.strike === tradeStrike)?.[signal === 'CE BUY' ? 'CE' : 'PE'] || null
+  // Exec chain + ATM — SENSEX when SENSEX selected, else same as NIFTY
+  const activeExecChain = execIdx !== underlying && execChain.length ? execChain : chain
+  const execSpotLTP     = execIdx !== underlying ? (oi[execCfg.spotToken]?.ltp || null) : priceNow
+  let execAtmStrike = null
+  if (execSpotLTP && activeExecChain.length) {
+    execAtmStrike = activeExecChain.reduce((b, s) =>
+      Math.abs(s.strike - execSpotLTP) < Math.abs(b.strike - execSpotLTP) ? s : b,
+      activeExecChain[0],
+    ).strike
+  }
+  const ceExecStrike = itmDepth === 0 ? execAtmStrike : (calcITMStrike(activeExecChain, execSpotLTP, 'CE', itmDepth) ?? execAtmStrike)
+  const peExecStrike = itmDepth === 0 ? execAtmStrike : (calcITMStrike(activeExecChain, execSpotLTP, 'PE', itmDepth) ?? execAtmStrike)
+  const execStrike   = signal === 'CE BUY' ? ceExecStrike : signal === 'PE BUY' ? peExecStrike : null
+  const tradeOption  = execStrike != null
+    ? activeExecChain.find(s => s.strike === execStrike)?.[signal === 'CE BUY' ? 'CE' : 'PE'] || null
     : null
+  const tradeStrike  = execStrike  // for display/backend
 
   tradeFnRef.current = {
     signal,
     fire: () => {
-      if (tradeOption) placePaperTrade(signal, tradeOption, tradeStrike, atmStrike)
+      if (tradeOption) placePaperTrade(signal, tradeOption, tradeStrike, execAtmStrike)
     },
   }
 
@@ -805,7 +852,7 @@ export default function AutoTrade() {
                   </div>
 
                   <button
-                    onClick={() => tradeOption && !hasOpenPos && !inCooldownUI && placePaperTrade(signal, tradeOption, tradeStrike, atmStrike)}
+                    onClick={() => tradeOption && !hasOpenPos && !inCooldownUI && placePaperTrade(signal, tradeOption, tradeStrike, execAtmStrike)}
                     disabled={tradeSubmitting || !tradeOption || hasOpenPos || inCooldownUI}
                     title={hasOpenPos ? 'Square off the open position first' : inCooldownUI ? `Next trade in ${cooldownLeft}s` : ''}
                     style={{
