@@ -107,7 +107,7 @@ function CondRow({ ok, label, value, enabled = true }) {
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function AutoTrade() {
   const [accountId, setAccountId]       = useState(null)
-  const [selectedIndex, setSelectedIndex] = useState('NIFTY')
+  const [executionSegment, setExecutionSegment] = useState('NIFTY')
   const [expiry, setExpiry]             = useState('')
   const [chain, setChain]               = useState([])
   const [futToken, setFutToken]         = useState(null)
@@ -116,11 +116,10 @@ export default function AutoTrade() {
   const [loadingChain, setLoadingChain] = useState(false)
   const [tradeSetup, setTradeSetup]     = useState(null)
   const [, forceRender]                 = useState(0)
-  const [paperSide, setPaperSide]       = useState('CE')   // manual CE/PE selector
 
-  // Derived from selected index
-  const underlying                       = selectedIndex
-  const { spotToken, spotExchangeType, optionExchangeType } = INDEX_CONFIG[selectedIndex]
+  // Signals are always computed from NIFTY OI.
+  const underlying = 'NIFTY'
+  const { spotToken, spotExchangeType, optionExchangeType } = INDEX_CONFIG[underlying]
 
   // Paper trade state
   const [tradeLots, setTradeLots]             = useState(1)
@@ -210,21 +209,21 @@ export default function AutoTrade() {
     if (!accountId) return
     axios.get(`/api/trade-setups/account/${accountId}`)
       .then(({ data }) => {
-        // Find setup matching selected index (e.g. NIFTY → 'NIFTY 50', SENSEX → 'SENSEX')
+        // Setup follows execution segment choice, but signal remains NIFTY-based.
         const match = data.find(s =>
-          s.segment_name?.toUpperCase().includes(underlying.toUpperCase())
+          s.segment_name?.toUpperCase().includes(executionSegment.toUpperCase())
         ) || data[0] || null
         setTradeSetup(match)
       })
       .catch(() => {})
-  }, [accountId, underlying])
+  }, [accountId, executionSegment])
 
   // ── Sync tradeLots from setup default_qty ─────────────────────────────────
   useEffect(() => {
     if (tradeSetup?.default_qty > 0) setTradeLots(Number(tradeSetup.default_qty))
   }, [tradeSetup])
 
-  // ── Reset on index change ─────────────────────────────────────────────────
+  // ── Reset on OI base index change ─────────────────────────────────────────
   useEffect(() => {
     esRef.current?.close(); esRef.current = null
     autoStarted.current  = false
@@ -232,7 +231,7 @@ export default function AutoTrade() {
     oiHistoryRef.current = []
     setStreaming(false); setStatus('idle')
     setChain([]); setFutToken(null); setExpiry('')
-  }, [selectedIndex])
+  }, [underlying])
 
   // ── Expiry ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -258,7 +257,7 @@ export default function AutoTrade() {
       .finally(() => setLoadingChain(false))
   }, [expiry, underlying])
 
-  // ── Reset on account change ───────────────────────────────────────────────
+  // ── Reset on account change ─────────────────────────────────────────────
   useEffect(() => {
     autoStarted.current  = false
     oiRef.current        = {}
@@ -429,7 +428,7 @@ export default function AutoTrade() {
   const refEntry = history.find(e => nowTs - e.ts >= WINDOW_MS) || history[0] || null
   const callChgPct = refEntry?.ce > 0 ? (totalCE - refEntry.ce) / refEntry.ce : 0
   const putChgPct  = refEntry?.pe > 0 ? (totalPE - refEntry.pe) / refEntry.pe : 0
-  const winLabel   = refEntry ? windowLabel(refEntry.ts) : 'building\u2026'
+  const winLabel   = refEntry ? windowLabel(refEntry.ts) : 'building…'
 
   const atmIdx = atmStrike ? chain.findIndex(s => s.strike === atmStrike) : -1
   const srRows = atmIdx !== -1
@@ -499,14 +498,14 @@ export default function AutoTrade() {
 
   const signalColor = signal === 'CE BUY' ? '#22c55e' : signal === 'PE BUY' ? '#ef4444' : '#475569'
   const pcrColor    = pcr === 0 ? '#475569' : pcr > cfg.pcrBullishMin ? '#22c55e' : pcr < cfg.pcrBearishMax ? '#ef4444' : '#f59e0b'
-  const pcrLabel    = pcr === 0 ? '\u2014' : pcr > cfg.pcrBullishMin ? 'Bullish' : pcr < cfg.pcrBearishMax ? 'Bearish' : 'Neutral'
+  const pcrLabel    = pcr === 0 ? '—' : pcr > cfg.pcrBullishMin ? 'Bullish' : pcr < cfg.pcrBearishMax ? 'Bearish' : 'Neutral'
 
   const ST_COLOR = { idle: '#9ca3af', connecting: '#f59e0b', live: '#22c55e', error: '#ef4444' }
-  const ST_LABEL = { idle: 'Idle', connecting: 'Connecting\u2026', live: '\u25cf Live', error: 'Error' }
-  const priceStr = priceNow ? `\u20b9${priceNow.toLocaleString('en-IN')}` : '\u2014'
+  const ST_LABEL = { idle: 'Idle', connecting: 'Connecting…', live: '● Live', error: 'Error' }
+  const priceStr = priceNow ? `₹${priceNow.toLocaleString('en-IN')}` : '—'
 
-  const ceArrow = callChgPct > 0.001 ? '\u2191' : callChgPct < -0.001 ? '\u2193' : '\u2192'
-  const peArrow = putChgPct  > 0.001 ? '\u2191' : putChgPct  < -0.001 ? '\u2193' : '\u2192'
+  const ceArrow = callChgPct > 0.001 ? '↑' : callChgPct < -0.001 ? '↓' : '→'
+  const peArrow = putChgPct  > 0.001 ? '↑' : putChgPct  < -0.001 ? '↓' : '→'
   const ceColor = callChgPct < -0.001 ? '#ef4444' : callChgPct > 0.001 ? '#22c55e' : '#64748b'
   const peColor = putChgPct  > 0.001  ? '#22c55e' : putChgPct  < -0.001 ? '#ef4444' : '#64748b'
 
@@ -524,11 +523,11 @@ export default function AutoTrade() {
             width: 38, height: 38, borderRadius: 12,
             background: 'linear-gradient(135deg, #22c55e 60%, #38bdf8 100%)',
             color: '#fff', fontSize: 20,
-          }}>\u26a1</span>
+          }}>⚡</span>
           Auto Trade Signal
         </h1>
         <p className="page-subtitle" style={{ marginTop: 4, color: '#a5b4fc', fontWeight: 500 }}>
-          PCR + OI + Price Action \u2014 NIFTY Current Week
+          PCR + OI + Price Action — NIFTY Current Week
         </p>
       </div>
 
@@ -544,8 +543,8 @@ export default function AutoTrade() {
           {tradeSetup && (
             <span style={{ fontSize: 12, color: '#475569', marginLeft: 4 }}>
               Setup: {tradeSetup.segment_name}
-              {lotSize ? ` \u00b7 Lot ${lotSize}` : ''}
-              {tradeSetup.default_qty ? ` \u00d7 ${tradeSetup.default_qty} lots` : ''}
+              {lotSize ? ` · Lot ${lotSize}` : ''}
+              {tradeSetup.default_qty ? ` × ${tradeSetup.default_qty} lots` : ''}
             </span>
           )}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
@@ -705,7 +704,7 @@ export default function AutoTrade() {
           </div>
         )
       })()}
-      {loadingChain && <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280', fontSize: 14 }}>Loading option chain\u2026</div>}
+      {loadingChain && <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280', fontSize: 14 }}>Loading option chain…</div>}
 
       {!loadingChain && chain.length > 0 && (
         <>
@@ -724,12 +723,12 @@ export default function AutoTrade() {
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: signalColor, marginBottom: 10 }}>
                   {signal === 'CE BUY'
-                    ? `Buy ${cfg.strikeType} CE \u00b7 Strike ${ceTradeStrike ?? '\u2014'}`
-                    : `Buy ${cfg.strikeType} PE \u00b7 Strike ${peTradeStrike ?? '\u2014'}`}
+                    ? `Buy ${cfg.strikeType} CE · Strike ${ceTradeStrike ?? '—'}`
+                    : `Buy ${cfg.strikeType} PE · Strike ${peTradeStrike ?? '—'}`}
                 </div>
                 {totalQty && (
                   <div style={{ fontSize: 13, color: '#64748b', marginBottom: 14 }}>
-                    Lot size {lotSize} \u00d7 {tradeLots} lot{tradeLots !== 1 ? 's' : ''} = <strong style={{ color: '#e2e8f0' }}>{totalQty} qty</strong>
+                    Lot size {lotSize} × {tradeLots} lot{tradeLots !== 1 ? 's' : ''} = <strong style={{ color: '#e2e8f0' }}>{totalQty} qty</strong>
                     {tradeSetup?.segment_name && <span style={{ marginLeft: 8, color: '#475569' }}>({tradeSetup.segment_name})</span>}
                   </div>
                 )}
@@ -741,7 +740,7 @@ export default function AutoTrade() {
                       width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
                       background: 'rgba(255,255,255,0.06)', color: '#e2e8f0', fontSize: 16, cursor: 'pointer',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>\u2212</button>
+                    }}>−</button>
                     <span style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', minWidth: 60, textAlign: 'center' }}>
                       {tradeLots} lot{tradeLots !== 1 ? 's' : ''}
                     </span>
@@ -762,100 +761,56 @@ export default function AutoTrade() {
                       color: tradeSubmitting ? '#475569' : signalColor,
                       transition: 'all 0.2s',
                     }}>
-                    {tradeSubmitting ? 'Placing\u2026' : '\ud83d\udcdd Paper Trade'}
+                    {tradeSubmitting ? 'Placing…' : '📝 Paper Trade'}
                   </button>
                 </div>
               </div>
             ) : (
               <div style={{ marginTop: 12, fontSize: 13, color: '#64748b' }}>
-                Waiting for enabled conditions to be met\u2026
+                Waiting for enabled conditions to be met…
               </div>
             )}
           </div>
 
-          {/* Manual CE/PE selector for paper trade */}
-          <div className="glass-card" style={{ marginTop: 10, padding: '14px 18px', border: '1px solid rgba(99,102,241,0.2)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#a5b4fc' }}>Manual Paper Trade</span>
-              {/* CE/PE toggle */}
-              <div style={{ display: 'flex', gap: 0, borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)' }}>
-                {['CE', 'PE'].map(s => (
-                  <button key={s} onClick={() => setPaperSide(s)} style={{
-                    padding: '6px 18px', fontWeight: 700, fontSize: 13, border: 'none', cursor: 'pointer',
-                    background: paperSide === s
-                      ? (s === 'CE' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)')
-                      : 'rgba(255,255,255,0.03)',
-                    color: paperSide === s ? (s === 'CE' ? '#4ade80' : '#f87171') : '#475569',
-                    borderRight: s === 'CE' ? '1px solid rgba(255,255,255,0.08)' : 'none',
-                    transition: 'all 0.15s',
-                  }}>{s}</button>
-                ))}
-              </div>
-              {/* Strike + LTP info */}
-              {(() => {
-                const strike = paperSide === 'CE' ? ceTradeStrike : peTradeStrike
-                const stRow  = strike ? chain.find(s => s.strike === strike) : null
-                const tok    = stRow?.[paperSide]?.token
-                const ltp    = tok ? oi[tok]?.ltp : null
-                return (
-                  <span style={{ fontSize: 13, color: '#64748b' }}>
-                    Strike <strong style={{ color: '#e2e8f0' }}>{strike ?? '—'}</strong>
-                    {' '}·{' '}
-                    LTP <strong style={{ color: paperSide === 'CE' ? '#4ade80' : '#f87171' }}>
-                      {ltp ? `₹${ltp.toFixed(2)}` : '—'}
-                    </strong>
-                  </span>
-                )
-              })()}
-              {/* Take manual paper trade button */}
-              {(() => {
-                const strike = paperSide === 'CE' ? ceTradeStrike : peTradeStrike
-                const stRow  = strike ? chain.find(s => s.strike === strike) : null
-                const option = stRow?.[paperSide] || null
-                return (
-                  <button
-                    onClick={() => option && placePaperTrade(paperSide === 'CE' ? 'CE BUY' : 'PE BUY', option, strike, atmStrike)}
-                    disabled={tradeSubmitting || !option}
-                    style={{
-                      marginLeft: 'auto', padding: '7px 20px', borderRadius: 10, fontWeight: 700, fontSize: 13,
-                      border: 'none', cursor: 'pointer',
-                      background: !option ? 'rgba(255,255,255,0.05)'
-                        : paperSide === 'CE'
-                        ? 'linear-gradient(135deg, #22c55e, #16a34a)'
-                        : 'linear-gradient(135deg, #ef4444, #b91c1c)',
-                      color: !option ? '#475569' : '#fff',
-                      opacity: !option ? 0.45 : 1,
-                      transition: 'opacity 0.15s',
-                    }}>
-                    📝 Buy {paperSide}
-                  </button>
-                )
-              })()}
-            </div>
-          </div>
+          {/* Manual Paper Trade removed per request */}
 
-          {/* Auto-paper toggle */}
-          <div className="glass-card" style={{ marginTop: 10, padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: autoPaper ? '#86efac' : '#94a3b8' }}>Auto Paper Trade</div>
-              <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
-                Automatically places a paper trade when signal transitions NO TRADE \u2192 BUY
+          {/* Auto-paper toggle + execution segment selector */}
+          <div className="glass-card" style={{ marginTop: 10, padding: '12px 18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: autoPaper ? '#86efac' : '#94a3b8' }}>Auto Paper Trade</div>
+                <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
+                  Signal uses NIFTY OI only. Execution segment follows your selection.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 6, borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  {['NIFTY', 'SENSEX'].map(idx => (
+                    <button key={idx} onClick={() => setExecutionSegment(idx)} style={{
+                      padding: '6px 12px', fontWeight: 700, fontSize: 13, border: 'none', cursor: 'pointer',
+                      background: executionSegment === idx ? 'rgba(99,102,241,0.18)' : 'transparent',
+                      color: executionSegment === idx ? '#a5b4fc' : '#94a3b8',
+                    }}>{idx}</button>
+                  ))}
+                </div>
+
+                <label style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <div style={{
+                    width: 44, height: 24, borderRadius: 12, transition: 'background 0.2s',
+                    background: autoPaper ? '#22c55e' : 'rgba(255,255,255,0.12)', position: 'relative',
+                  }}>
+                    <div style={{
+                      position: 'absolute', top: 4, width: 16, height: 16, borderRadius: '50%',
+                      background: '#fff', transition: 'left 0.2s', left: autoPaper ? 24 : 4,
+                      boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                    }} />
+                    <input type="checkbox" checked={autoPaper} onChange={e => setAutoPaper(e.target.checked)}
+                      style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', cursor: 'pointer', margin: 0 }} />
+                  </div>
+                </label>
               </div>
             </div>
-            <label style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
-              <div style={{
-                width: 44, height: 24, borderRadius: 12, transition: 'background 0.2s',
-                background: autoPaper ? '#22c55e' : 'rgba(255,255,255,0.12)', position: 'relative',
-              }}>
-                <div style={{
-                  position: 'absolute', top: 4, width: 16, height: 16, borderRadius: '50%',
-                  background: '#fff', transition: 'left 0.2s', left: autoPaper ? 24 : 4,
-                  boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-                }} />
-                <input type="checkbox" checked={autoPaper} onChange={e => setAutoPaper(e.target.checked)}
-                  style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', cursor: 'pointer', margin: 0 }} />
-              </div>
-            </label>
           </div>
 
           {/* Trade result flash */}
@@ -867,9 +822,9 @@ export default function AutoTrade() {
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: tradeResult.ok ? '#4ade80' : '#f87171' }}>
-                {tradeResult.ok ? '\u2713' : '\u2717'} {tradeResult.msg}
+                {tradeResult.ok ? '✓' : '✗'} {tradeResult.msg}
               </span>
-              <button onClick={() => setTradeResult(null)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 16 }}>\u00d7</button>
+              <button onClick={() => setTradeResult(null)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 16 }}>×</button>
             </div>
           )}
 
@@ -877,13 +832,13 @@ export default function AutoTrade() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 12 }}>
             <div className="glass-card" style={{ textAlign: 'center', padding: '1rem' }}>
               <div style={{ fontSize: 11, color: '#475569', textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 6 }}>PCR</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: pcrColor }}>{pcr > 0 ? pcr.toFixed(2) : '\u2014'}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: pcrColor }}>{pcr > 0 ? pcr.toFixed(2) : '—'}</div>
               <div style={{ fontSize: 12, color: pcrColor, marginTop: 4 }}>{pcrLabel}</div>
             </div>
             <div className="glass-card" style={{ textAlign: 'center', padding: '1rem' }}>
               <div style={{ fontSize: 11, color: '#475569', textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 6 }}>Price</div>
               <div style={{ fontSize: 22, fontWeight: 800, color: '#e2e8f0' }}>{priceStr}</div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>ATM {atmStrike ?? '\u2014'}</div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>ATM {atmStrike ?? '—'}</div>
             </div>
             <div className="glass-card" style={{ textAlign: 'center', padding: '1rem' }}>
               <div style={{ fontSize: 11, color: '#475569', textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 6 }}>CE OI</div>
@@ -910,12 +865,12 @@ export default function AutoTrade() {
                   ? <span style={{ fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.2)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.5)' }}>READY</span>
                   : <span style={{ fontSize: 11, color: '#334155' }}>{winLabel}</span>}
               </div>
-              <CondRow enabled={cfg.ceBuyConds.priceBreak}   ok={priceAboveRes} label="Price above resistance"        value={`${priceStr} / ${resistance ?? '\u2014'}`} />
-              <CondRow enabled={cfg.ceBuyConds.ceOiDecline}  ok={ceOiDown}      label={`CE OI \u2193 \u2265 ${cfg.ceOiDecline}%`}  value={pct(callChgPct)} />
-              <CondRow enabled={cfg.ceBuyConds.peOiIncrease} ok={peOiUp}        label={`PE OI \u2191 \u2265 ${cfg.peOiIncrease}%`} value={pct(putChgPct)} />
-              <CondRow enabled={cfg.ceBuyConds.bullishPcr}   ok={bullishPcr}    label={`PCR > ${cfg.pcrBullishMin}`}      value={pcr > 0 ? pcr.toFixed(2) : '\u2014'} />
+              <CondRow enabled={cfg.ceBuyConds.priceBreak}   ok={priceAboveRes} label="Price above resistance"        value={`${priceStr} / ${resistance ?? '—'}`} />
+              <CondRow enabled={cfg.ceBuyConds.ceOiDecline}  ok={ceOiDown}      label={`CE OI ↓ ≥ ${cfg.ceOiDecline}%`}  value={pct(callChgPct)} />
+              <CondRow enabled={cfg.ceBuyConds.peOiIncrease} ok={peOiUp}        label={`PE OI ↑ ≥ ${cfg.peOiIncrease}%`} value={pct(putChgPct)} />
+              <CondRow enabled={cfg.ceBuyConds.bullishPcr}   ok={bullishPcr}    label={`PCR > ${cfg.pcrBullishMin}`}      value={pcr > 0 ? pcr.toFixed(2) : '—'} />
               <div style={{ marginTop: 10, fontSize: 12, color: '#334155' }}>
-                {ceBuyEnabledCount} condition{ceBuyEnabledCount !== 1 ? 's' : ''} active \u00b7 {cfg.strikeType} CE on signal
+                {ceBuyEnabledCount} condition{ceBuyEnabledCount !== 1 ? 's' : ''} active · {cfg.strikeType} CE on signal
               </div>
             </div>
 
@@ -930,21 +885,21 @@ export default function AutoTrade() {
                   ? <span style={{ fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 20, background: 'rgba(239,68,68,0.2)', color: '#f87171', border: '1px solid rgba(239,68,68,0.5)' }}>READY</span>
                   : <span style={{ fontSize: 11, color: '#334155' }}>{winLabel}</span>}
               </div>
-              <CondRow enabled={cfg.peBuyConds.priceBreak}   ok={priceBelowSup} label="Price below support"          value={`${priceStr} / ${support ?? '\u2014'}`} />
-              <CondRow enabled={cfg.peBuyConds.peOiDecline}  ok={peOiDown}      label={`PE OI \u2193 \u2265 ${cfg.peOiDecline}%`}  value={pct(putChgPct)} />
-              <CondRow enabled={cfg.peBuyConds.ceOiIncrease} ok={ceOiUp}        label={`CE OI \u2191 \u2265 ${cfg.ceOiIncrease}%`} value={pct(callChgPct)} />
-              <CondRow enabled={cfg.peBuyConds.bearishPcr}   ok={bearishPcr}    label={`PCR < ${cfg.pcrBearishMax}`}      value={pcr > 0 ? pcr.toFixed(2) : '\u2014'} />
+              <CondRow enabled={cfg.peBuyConds.priceBreak}   ok={priceBelowSup} label="Price below support"          value={`${priceStr} / ${support ?? '—'}`} />
+              <CondRow enabled={cfg.peBuyConds.peOiDecline}  ok={peOiDown}      label={`PE OI ↓ ≥ ${cfg.peOiDecline}%`}  value={pct(putChgPct)} />
+              <CondRow enabled={cfg.peBuyConds.ceOiIncrease} ok={ceOiUp}        label={`CE OI ↑ ≥ ${cfg.ceOiIncrease}%`} value={pct(callChgPct)} />
+              <CondRow enabled={cfg.peBuyConds.bearishPcr}   ok={bearishPcr}    label={`PCR < ${cfg.pcrBearishMax}`}      value={pcr > 0 ? pcr.toFixed(2) : '—'} />
               <div style={{ marginTop: 10, fontSize: 12, color: '#334155' }}>
-                {peBuyEnabledCount} condition{peBuyEnabledCount !== 1 ? 's' : ''} active \u00b7 {cfg.strikeType} PE on signal
+                {peBuyEnabledCount} condition{peBuyEnabledCount !== 1 ? 's' : ''} active · {cfg.strikeType} PE on signal
               </div>
             </div>
           </div>
 
           {/* OI info strip */}
           <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 8, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12 }}>
-            <span style={{ color: pcrColor, fontWeight: 700 }}>PCR {pcr > 0 ? pcr.toFixed(2) : '\u2014'} \u2014 {pcrLabel}</span>
-            <span style={{ color: '#475569' }}>S {support ?? '\u2014'} \u00b7 R {resistance ?? '\u2014'}</span>
-            <span style={{ color: '#475569' }}>{history.length ? `${history.length} OI snapshots \u00b7 ${winLabel}` : 'Building OI history\u2026'}</span>
+            <span style={{ color: pcrColor, fontWeight: 700 }}>PCR {pcr > 0 ? pcr.toFixed(2) : '—'} — {pcrLabel}</span>
+            <span style={{ color: '#475569' }}>S {support ?? '—'} · R {resistance ?? '—'}</span>
+            <span style={{ color: '#475569' }}>{history.length ? `${history.length} OI snapshots · ${winLabel}` : 'Building OI history…'}</span>
           </div>
 
           {/* Trade log */}
@@ -1020,7 +975,7 @@ export default function AutoTrade() {
 
       {!loadingChain && chain.length === 0 && expiry && (
         <div style={{ textAlign: 'center', padding: '3rem', color: '#475569', fontSize: 14 }}>
-          Waiting for option chain data\u2026
+          Waiting for option chain data…
         </div>
       )}
     </div>
