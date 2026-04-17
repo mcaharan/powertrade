@@ -22,12 +22,14 @@ app.use('/api/oi',         oiRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {
-  try {
-    await db.query('SELECT 1');
-    res.json({ status: 'OK', database: 'connected' });
-  } catch (err) {
-    res.status(500).json({ status: 'ERROR', database: 'disconnected', error: err.message });
-  }
+  const dbStatus = await db.getStatus();
+  const statusCode = dbStatus.connected ? 200 : 503;
+  res.status(statusCode).json({
+    status: dbStatus.connected ? 'OK' : 'ERROR',
+    database: dbStatus.connected ? 'connected' : 'disconnected',
+    mode: dbStatus.mode,
+    error: dbStatus.error || null,
+  });
 });
 
 // ── Dashboard stats ──────────────────────────────────────────

@@ -354,15 +354,15 @@ export default function TradeSetups() {
                     </select>
                   </div>
                   <div>
-                    <label className="angel-label">Lot Size *</label>
+                    <label className="angel-label">Default Lots *</label>
                     <input className="angel-input" type="number" name="lot_size" value={form.lot_size} onChange={handleChange} min="1" required />
                   </div>
                   <div>
-                    <label className="angel-label">Default Qty *</label>
+                    <label className="angel-label">Lot Size (units/lot) *</label>
                     <input className="angel-input" type="number" name="default_qty" value={form.default_qty} onChange={handleChange} min="1" required />
                   </div>
                   <div>
-                    <label className="angel-label">Max Qty (optional)</label>
+                    <label className="angel-label">Max Lots (optional)</label>
                     <input className="angel-input" type="number" name="max_qty" value={form.max_qty} onChange={handleChange} min="1" />
                   </div>
                 </div>
@@ -520,9 +520,9 @@ export default function TradeSetups() {
               {/* Stats row — qty */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                 {[
-                  { label: 'Lot Size',    value: setup.lot_size,          color: '#38bdf8' },
-                  { label: 'Default Qty', value: setup.default_qty,       color: '#10b981' },
-                  { label: 'Max Qty',     value: setup.max_qty || '—',    color: '#f59e0b' },
+                  { label: 'Default Lots', value: setup.lot_size,       color: '#38bdf8' },
+                  { label: 'Lot Size',     value: setup.default_qty,    color: '#10b981' },
+                  { label: 'Max Lots',     value: setup.max_qty || '—', color: '#f59e0b' },
                 ].map(({ label, value, color }) => (
                   <div key={label} style={{ padding: '10px 14px', borderRight: '1px solid rgba(255,255,255,0.04)' }}>
                     <div style={{ fontSize: 10, color: '#475569', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>

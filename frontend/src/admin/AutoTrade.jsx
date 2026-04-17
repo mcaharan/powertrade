@@ -190,6 +190,34 @@ export default function AutoTrade() {
         prevSignalRef.current = curr
       }
 
+      // ── Auto-exit: SL / Target / TSL ──────────────────────────────────────
+      setPositions(prev => {
+        let changed = false
+        const next = prev.map(p => {
+          if (p.status !== 'open') return p
+          const ltp = oiRef.current[p.token]?.ltp
+          if (!ltp) return p
+
+          const profit   = ltp - p.buyPrice          // +ve = gain for BUY
+          const newPeak  = Math.max(p.peakPrice ?? p.buyPrice, ltp)
+          const peakMoved = newPeak !== (p.peakPrice ?? p.buyPrice)
+
+          let exitReason = null
+          if (p.slPoints  && profit <= -p.slPoints)                                          exitReason = 'SL'
+          else if (p.tgtPoints && profit >= p.tgtPoints)                                     exitReason = 'TARGET'
+          else if (p.tslPoints && newPeak - p.buyPrice >= p.tslPoints
+                               && newPeak - ltp        >= p.tslPoints)                       exitReason = 'TSL'
+
+          if (exitReason) {
+            changed = true
+            return { ...p, peakPrice: newPeak, status: 'closed', exitPrice: ltp, exitTime: now, exitReason }
+          }
+          if (peakMoved) { changed = true; return { ...p, peakPrice: newPeak } }
+          return p
+        })
+        return changed ? next : prev
+      })
+
       forceRender(n => n + 1)
     }, 500)
     return () => clearInterval(id)
@@ -218,9 +246,9 @@ export default function AutoTrade() {
       .catch(() => {})
   }, [accountId, executionSegment])
 
-  // ── Sync tradeLots from setup default_qty ─────────────────────────────────
+  // ── Sync tradeLots from setup lot_size ────────────────────────────────────
   useEffect(() => {
-    if (tradeSetup?.default_qty > 0) setTradeLots(Number(tradeSetup.default_qty))
+    if (tradeSetup?.lot_size > 0) setTradeLots(Number(tradeSetup.lot_size))
   }, [tradeSetup])
 
   // ── Reset on OI base index change ─────────────────────────────────────────
@@ -368,7 +396,7 @@ export default function AutoTrade() {
         expiry,
       })
       const buyPrice = oiRef.current[option.token]?.ltp || 0
-      const lotSize  = tradeSetup?.lot_size  || 1
+      const lotSize  = tradeSetup?.default_qty || 1
       const qty      = lotSize * tradeLots
       const posId    = Date.now()
       const entry = {
@@ -380,16 +408,18 @@ export default function AutoTrade() {
         id: posId, sig, symbol: option.symbol, token: option.token,
         strike: strikeUsed, side: sig === 'CE BUY' ? 'CE' : 'PE',
         lots: tradeLots, qty, buyPrice, entryTime: posId, status: 'open',
-        exitPrice: null, exitTime: null,
-        slPoints: tradeSetup?.stop_loss_points ? Number(tradeSetup.stop_loss_points) : null,
-        tgtPoints: tradeSetup?.target_points ? Number(tradeSetup.target_points) : null,
+        exitPrice: null, exitTime: null, exitReason: null,
+        peakPrice: buyPrice,
+        slPoints:  tradeSetup?.stop_loss_points     ? Number(tradeSetup.stop_loss_points)     : null,
+        tgtPoints: tradeSetup?.target_points        ? Number(tradeSetup.target_points)        : null,
+        tslPoints: tradeSetup?.trailing_stop_points ? Number(tradeSetup.trailing_stop_points) : null,
       }])
       setTradeLog(prev => [entry, ...prev].slice(0, MAX_LOG))
       setTradeResult({ ok: true, msg: `Paper order placed · ${option.symbol} · ${tradeLots} lot${tradeLots !== 1 ? 's' : ''} @ ₹${buyPrice.toFixed(2)}`, ts: Date.now() })
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Order failed'
       const buyPrice = oiRef.current[option.token]?.ltp || 0
-      const lotSize  = tradeSetup?.lot_size  || 1
+      const lotSize  = tradeSetup?.default_qty || 1
       const qty      = lotSize * tradeLots
       const entry = { ts: Date.now(), sig, symbol: option.symbol, strike: strikeUsed, lots: tradeLots, qty, buyPrice, ok: false, msg }
       setTradeLog(prev => [entry, ...prev].slice(0, MAX_LOG))
@@ -491,7 +521,7 @@ export default function AutoTrade() {
     },
   }
 
-  const lotSize    = tradeSetup?.lot_size    ? Number(tradeSetup.lot_size)    : null
+  const lotSize    = tradeSetup?.default_qty ? Number(tradeSetup.default_qty) : null
   const slPoints   = tradeSetup?.stop_loss_points ? Number(tradeSetup.stop_loss_points) : null
   const tgtPoints  = tradeSetup?.target_points    ? Number(tradeSetup.target_points)    : null
   const totalQty   = lotSize ? lotSize * tradeLots : null
@@ -544,7 +574,7 @@ export default function AutoTrade() {
             <span style={{ fontSize: 12, color: '#475569', marginLeft: 4 }}>
               Setup: {tradeSetup.segment_name}
               {lotSize ? ` · Lot ${lotSize}` : ''}
-              {tradeSetup.default_qty ? ` × ${tradeSetup.default_qty} lots` : ''}
+              {tradeSetup.lot_size ? ` × ${tradeSetup.lot_size} lots` : ''}
             </span>
           )}
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
@@ -683,7 +713,13 @@ export default function AutoTrade() {
                         <td style={{ padding: '9px 10px' }}>
                           {isOpen
                             ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(56,189,248,0.15)', color: '#38bdf8', fontWeight: 700 }}>OPEN</span>
-                            : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(255,255,255,0.06)', color: '#475569' }}>CLOSED</span>
+                            : p.exitReason === 'SL'
+                              ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(239,68,68,0.18)', color: '#f87171', fontWeight: 700 }}>SL HIT</span>
+                              : p.exitReason === 'TARGET'
+                              ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(34,197,94,0.18)', color: '#4ade80', fontWeight: 700 }}>TARGET HIT</span>
+                              : p.exitReason === 'TSL'
+                              ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(245,158,11,0.18)', color: '#f59e0b', fontWeight: 700 }}>TSL HIT</span>
+                              : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(255,255,255,0.06)', color: '#475569' }}>CLOSED</span>
                           }
                         </td>
                         <td style={{ padding: '9px 10px', textAlign: 'right' }}>
