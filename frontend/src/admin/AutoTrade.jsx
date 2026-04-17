@@ -117,9 +117,8 @@ export default function AutoTrade() {
   const [tradeSetup, setTradeSetup]     = useState(null)
   const [, forceRender]                 = useState(0)
 
-  // Signals are always computed from NIFTY OI.
-  const underlying = 'NIFTY'
-  const { spotToken, spotExchangeType, optionExchangeType } = INDEX_CONFIG[underlying]
+  const underlying = executionSegment
+  const { spotToken, spotExchangeType, optionExchangeType } = INDEX_CONFIG[underlying] ?? INDEX_CONFIG['NIFTY']
 
   // Paper trade state
   const [tradeLots, setTradeLots]             = useState(1)
@@ -143,8 +142,10 @@ export default function AutoTrade() {
   const autoStarted   = useRef(false)
   const prevSignalRef = useRef('NO TRADE')
   const autoPaperRef  = useRef(autoPaper)
-  const submittingRef = useRef(false)
-  const tradeFnRef    = useRef(null)
+  const submittingRef    = useRef(false)
+  const tradeFnRef       = useRef(null)
+  const positionsRef     = useRef([])
+  const lastCloseTimeRef = useRef(0)
 
   useEffect(() => { chainRef.current = chain },    [chain])
   useEffect(() => { futRef.current   = futToken }, [futToken])
@@ -154,6 +155,7 @@ export default function AutoTrade() {
   }, [autoPaper])
 
   useEffect(() => {
+    positionsRef.current = positions
     try { localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions)) } catch {}
   }, [positions])
 
@@ -180,11 +182,15 @@ export default function AutoTrade() {
         }
       }
 
-      // Auto-paper: fire when signal transitions NO TRADE → BUY
+      // Auto-paper: fire when signal transitions NO TRADE → BUY (only if no open position)
+      const COOLDOWN_MS = 10_000
+      const hasOpen    = positionsRef.current.some(p => p.status === 'open')
+      const inCooldown = !hasOpen && lastCloseTimeRef.current > 0 && (now - lastCloseTimeRef.current) < COOLDOWN_MS
+
       if (autoPaperRef.current && !submittingRef.current) {
         const curr = tradeFnRef.current?.signal ?? 'NO TRADE'
         const prev = prevSignalRef.current
-        if (prev === 'NO TRADE' && curr !== 'NO TRADE') {
+        if (prev === 'NO TRADE' && curr !== 'NO TRADE' && !hasOpen && !inCooldown) {
           tradeFnRef.current?.fire()
         }
         prevSignalRef.current = curr
@@ -198,18 +204,19 @@ export default function AutoTrade() {
           const ltp = oiRef.current[p.token]?.ltp
           if (!ltp) return p
 
-          const profit   = ltp - p.buyPrice          // +ve = gain for BUY
-          const newPeak  = Math.max(p.peakPrice ?? p.buyPrice, ltp)
+          const profit    = ltp - p.buyPrice
+          const newPeak   = Math.max(p.peakPrice ?? p.buyPrice, ltp)
           const peakMoved = newPeak !== (p.peakPrice ?? p.buyPrice)
 
           let exitReason = null
-          if (p.slPoints  && profit <= -p.slPoints)                                          exitReason = 'SL'
-          else if (p.tgtPoints && profit >= p.tgtPoints)                                     exitReason = 'TARGET'
+          if (p.slPoints  && profit <= -p.slPoints)                                        exitReason = 'SL'
+          else if (p.tgtPoints && profit >= p.tgtPoints)                                   exitReason = 'TARGET'
           else if (p.tslPoints && newPeak - p.buyPrice >= p.tslPoints
-                               && newPeak - ltp        >= p.tslPoints)                       exitReason = 'TSL'
+                               && newPeak - ltp        >= p.tslPoints)                     exitReason = 'TSL'
 
           if (exitReason) {
             changed = true
+            lastCloseTimeRef.current = now
             return { ...p, peakPrice: newPeak, status: 'closed', exitPrice: ltp, exitTime: now, exitReason }
           }
           if (peakMoved) { changed = true; return { ...p, peakPrice: newPeak } }
@@ -357,6 +364,7 @@ export default function AutoTrade() {
 
   // ── Square off a position ─────────────────────────────────────────────────
   const squareOff = useCallback((posId) => {
+    lastCloseTimeRef.current = Date.now()
     setPositions(prev => prev.map(p => {
       if (p.id !== posId || p.status !== 'open') return p
       const exitPrice = oiRef.current[p.token]?.ltp || p.buyPrice
@@ -365,6 +373,7 @@ export default function AutoTrade() {
   }, [])
 
   const squareOffAll = useCallback(() => {
+    lastCloseTimeRef.current = Date.now()
     setPositions(prev => prev.map(p => {
       if (p.status !== 'open') return p
       const exitPrice = oiRef.current[p.token]?.ltp || p.buyPrice
@@ -525,6 +534,14 @@ export default function AutoTrade() {
   const slPoints   = tradeSetup?.stop_loss_points ? Number(tradeSetup.stop_loss_points) : null
   const tgtPoints  = tradeSetup?.target_points    ? Number(tradeSetup.target_points)    : null
   const totalQty   = lotSize ? lotSize * tradeLots : null
+
+  const COOLDOWN_MS   = 10_000
+  const nowTs2        = Date.now()
+  const hasOpenPos    = positions.some(p => p.status === 'open')
+  const cooldownLeft  = (!hasOpenPos && lastCloseTimeRef.current > 0)
+    ? Math.max(0, Math.ceil((COOLDOWN_MS - (nowTs2 - lastCloseTimeRef.current)) / 1000))
+    : 0
+  const inCooldownUI  = cooldownLeft > 0
 
   const signalColor = signal === 'CE BUY' ? '#22c55e' : signal === 'PE BUY' ? '#ef4444' : '#475569'
   const pcrColor    = pcr === 0 ? '#475569' : pcr > cfg.pcrBullishMin ? '#22c55e' : pcr < cfg.pcrBearishMax ? '#ef4444' : '#f59e0b'
@@ -788,16 +805,18 @@ export default function AutoTrade() {
                   </div>
 
                   <button
-                    onClick={() => tradeOption && placePaperTrade(signal, tradeOption, tradeStrike, atmStrike)}
-                    disabled={tradeSubmitting || !tradeOption}
+                    onClick={() => tradeOption && !hasOpenPos && !inCooldownUI && placePaperTrade(signal, tradeOption, tradeStrike, atmStrike)}
+                    disabled={tradeSubmitting || !tradeOption || hasOpenPos || inCooldownUI}
+                    title={hasOpenPos ? 'Square off the open position first' : inCooldownUI ? `Next trade in ${cooldownLeft}s` : ''}
                     style={{
-                      padding: '9px 26px', borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: 'pointer',
-                      background: tradeSubmitting ? 'rgba(255,255,255,0.05)' : `linear-gradient(135deg, ${signalColor}88, ${signalColor}44)`,
-                      border: `1px solid ${signalColor}66`,
-                      color: tradeSubmitting ? '#475569' : signalColor,
+                      padding: '9px 26px', borderRadius: 12, fontSize: 14, fontWeight: 800,
+                      cursor: (tradeSubmitting || !tradeOption || hasOpenPos || inCooldownUI) ? 'not-allowed' : 'pointer',
+                      background: (tradeSubmitting || hasOpenPos || inCooldownUI) ? 'rgba(255,255,255,0.05)' : `linear-gradient(135deg, ${signalColor}88, ${signalColor}44)`,
+                      border: `1px solid ${(hasOpenPos || inCooldownUI) ? 'rgba(255,255,255,0.1)' : signalColor + '66'}`,
+                      color: (tradeSubmitting || hasOpenPos || inCooldownUI) ? '#475569' : signalColor,
                       transition: 'all 0.2s',
                     }}>
-                    {tradeSubmitting ? 'Placing…' : '📝 Paper Trade'}
+                    {tradeSubmitting ? 'Placing…' : hasOpenPos ? '🔒 Position Open' : inCooldownUI ? `⏳ Next in ${cooldownLeft}s` : '📝 Paper Trade'}
                   </button>
                 </div>
               </div>
